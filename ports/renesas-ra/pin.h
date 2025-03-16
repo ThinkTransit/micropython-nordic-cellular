@@ -46,8 +46,6 @@ typedef struct {
     const machine_pin_adc_obj_t *ad;
 } machine_pin_obj_t;
 
-extern const mp_obj_type_t machine_pin_type;
-
 // Include all of the individual pin objects
 #include "genhdr/pins.h"
 

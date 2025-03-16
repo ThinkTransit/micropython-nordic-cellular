@@ -36,10 +36,8 @@
 #include "py/mphal.h"
 #include "py/gc.h"
 
-// This needs to be defined before any ESP SDK headers are included
-#define USE_US_TIMER 1
-
 #include "extmod/misc.h"
+#include "extmod/modmachine.h"
 #include "shared/readline/readline.h"
 #include "shared/runtime/pyexec.h"
 #include "gccollect.h"
@@ -49,9 +47,9 @@
 #include "modespnow.h"
 #endif
 
-STATIC char heap[38 * 1024];
+static char heap[38 * 1024];
 
-STATIC void mp_reset(void) {
+static void mp_reset(void) {
     mp_stack_set_top((void *)0x40000000);
     mp_stack_set_limit(8192);
     mp_hal_init();
@@ -65,14 +63,13 @@ STATIC void mp_reset(void) {
     #endif
     pin_init0();
     readline_init0();
-    dupterm_task_init();
 
     // Activate UART(0) on dupterm slot 1 for the REPL
     {
         mp_obj_t args[2];
         args[0] = MP_OBJ_NEW_SMALL_INT(0);
         args[1] = MP_OBJ_NEW_SMALL_INT(115200);
-        args[0] = MP_OBJ_TYPE_GET_SLOT(&pyb_uart_type, make_new)(&pyb_uart_type, 2, 0, args);
+        args[0] = MP_OBJ_TYPE_GET_SLOT(&machine_uart_type, make_new)(&machine_uart_type, 2, 0, args);
         args[1] = MP_OBJ_NEW_SMALL_INT(1);
         mp_os_dupterm_obj.fun.var(2, args);
     }

@@ -49,10 +49,21 @@ PinAf = namedtuple(
     ],
 )
 
+# Only support ADC1, ADC2, ADC3 for now (e.g. cannot support ADC4 & ADC5 on
+# STM32G4).
+MIN_ADC_UNIT = 1
+MAX_ADC_UNIT = 3
+
 
 class Stm32Pin(boardgen.Pin):
     def __init__(self, cpu_pin_name):
         super().__init__(cpu_pin_name)
+
+        # Pins ending in "_C" correspond to the analog-only pad of a pair
+        # of dual (analog) pads found on H7 MCUs (eg PA0 and PA0_C pair).
+        self._analog_only = cpu_pin_name.endswith("_C")
+        if self._analog_only:
+            cpu_pin_name = cpu_pin_name[:-2]
 
         # P<port><num> (already verified by validate_cpu_pin_name).
         self._port = cpu_pin_name[1]
@@ -67,14 +78,25 @@ class Stm32Pin(boardgen.Pin):
         self._adc_units = []
 
     # Called for each AF defined in the csv file for this pin. e.g. "SPI2_NSS/I2S2_WS"
-    def add_af(self, af_idx, _af_name, af):
+    def add_af(self, af_idx, af_name, af):
         if af_idx > 16:
-            # TODO: We don't support AF 17 or higher.
+            # The AF csv files should not have more than 16 AFs + 1 ADC list.
             return
 
         # AF 16 is the ADC, which is special cased below.
         if af_idx == 16:
+            if af_name != "ADC":
+                raise boardgen.PinGeneratorError(
+                    "Invalid AF column name '{:s}' for ADC column with index {:d}.".format(
+                        af_name, af_idx
+                    )
+                )
             return self.add_adc(af)
+
+        if af_name != "AF{:d}".format(af_idx):
+            raise boardgen.PinGeneratorError(
+                "Invalid AF column name '{:s}' for AF index {:d}.".format(af_name, af_idx)
+            )
 
         # If there is a slash, then the slash separates multiple aliases for
         # the same alternate function.
@@ -100,6 +122,9 @@ class Stm32Pin(boardgen.Pin):
                 if af_ext:
                     af_pin = "EXT" + af_pin
 
+                # Special case: FDCAN peripheral is named CAN in MicroPython, same as bxCAN
+                af_fn = af_fn.replace("FDCAN", "CAN")
+
                 af_supported = af_fn in SUPPORTED_AF and af_pin in SUPPORTED_AF[af_fn]
 
                 self._afs.append(PinAf(af_idx, af_fn, af_unit, af_pin, af_supported, af_name))
@@ -118,8 +143,12 @@ class Stm32Pin(boardgen.Pin):
                 raise boardgen.PinGeneratorError(
                     "Invalid adc '{:s}' for pin '{:s}'".format(adc_name, self.name())
                 )
-            adc_units = [int(x) for x in m.group(1)]
-            _adc_mode = m.group(2)
+            adc_units = [int(x) for x in m.group(1) if MIN_ADC_UNIT <= int(x) <= MAX_ADC_UNIT]
+            adc_mode = m.group(2)
+            if adc_mode == "INN":
+                # On H7 we have INN/INP, all other parts use IN only. Only use
+                # IN or INP channels.
+                continue
             adc_channel = int(m.group(3))
 
             # Pick the entry with the most ADC units, e.g. "ADC1_INP16/ADC12_INN1/ADC12_INP0" --> "ADC12_INN1".
@@ -142,8 +171,9 @@ class Stm32Pin(boardgen.Pin):
         )
 
         # PIN(p_port, p_pin, p_af, p_adc_num, p_adc_channel)
-        return "PIN({:s}, {:d}, pin_{:s}_af, {:s}, {:d})".format(
-            self._port, self._pin, self.name(), adc_units_bitfield, self._adc_channel
+        pin_macro = "PIN_ANALOG" if self._analog_only else "PIN"
+        return "{:s}({:s}, {:d}, pin_{:s}_af, {:s}, {:d})".format(
+            pin_macro, self._port, self._pin, self.name(), adc_units_bitfield, self._adc_channel
         )
 
     # This will be called at the start of the output (after the prefix). Use
@@ -185,7 +215,7 @@ class Stm32Pin(boardgen.Pin):
     def validate_cpu_pin_name(cpu_pin_name):
         boardgen.Pin.validate_cpu_pin_name(cpu_pin_name)
 
-        if not re.match("P[A-K][0-9]+$", cpu_pin_name):
+        if not re.match("P[A-K][0-9]+(_C)?$", cpu_pin_name):
             raise boardgen.PinGeneratorError("Invalid cpu pin name '{}'".format(cpu_pin_name))
 
 
@@ -231,6 +261,8 @@ class Stm32PinGenerator(boardgen.PinGenerator):
             )
             # Don't include pins that weren't in pins.csv.
             for pin in self.available_pins():
+                if pin._hidden:
+                    continue
                 if adc_unit in pin._adc_units:
                     print(
                         "    [{:d}] = {:s},".format(pin._adc_channel, self._cpu_pin_pointer(pin)),

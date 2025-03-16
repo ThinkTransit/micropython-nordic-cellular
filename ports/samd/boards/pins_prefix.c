@@ -4,7 +4,7 @@
 
 #include "py/obj.h"
 #include "py/mphal.h"
-#include "modmachine.h"
+#include "extmod/modmachine.h"
 #include "pin_af.h"
 #include "genhdr/pins.h"
 

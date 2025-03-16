@@ -31,9 +31,9 @@
 #include <stdint.h>
 #include "string.h"
 
-#include "modmachine.h"
 #include "py/runtime.h"
 #include "py/misc.h"
+#include "extmod/modmachine.h"
 #include "pin_af.h"
 #include "sam.h"
 
@@ -53,7 +53,7 @@ const machine_pin_obj_t *pin_find_by_id(int pin_id) {
     mp_raise_ValueError(MP_ERROR_TEXT("not a Pin"));
 }
 
-STATIC const machine_pin_obj_t *pin_find_named_pin(const mp_obj_dict_t *named_pins, mp_obj_t name) {
+static const machine_pin_obj_t *pin_find_named_pin(const mp_obj_dict_t *named_pins, mp_obj_t name) {
     mp_map_elem_t *named_elem = mp_map_lookup((mp_map_t *)&named_pins->map, name, MP_MAP_LOOKUP);
     if (named_elem != NULL) {
         return named_elem->value;
@@ -112,7 +112,7 @@ adc_config_t get_adc_config(int pin_id, int32_t flag) {
     const machine_pin_obj_t *pct_ptr = pin_find_by_id(pin_id);
     if (pct_ptr->adc0 != 0xff && (flag & (1 << pct_ptr->adc0)) == 0) {
         return (adc_config_t) {0, pct_ptr->adc0};
-    #if defined(MUC_SAMD51)
+    #if defined(MCU_SAMD51)
     } else if (pct_ptr->adc1 != 0xff && (flag & (1 << (pct_ptr->adc1 + 16))) == 0) {
         return (adc_config_t) {1, pct_ptr->adc1};
     #endif

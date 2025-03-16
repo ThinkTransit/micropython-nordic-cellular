@@ -13,7 +13,19 @@ ifeq ($(wildcard $(BOARD_DIR)/.),)
 $(error Invalid BOARD specified: $(BOARD_DIR))
 endif
 
+ifneq ($(BOARD_VARIANT),)
+ifeq ($(wildcard $(BOARD_DIR)/mpconfigvariant_$(BOARD_VARIANT).mk),)
+$(error Invalid BOARD_VARIANT specified: $(BOARD_VARIANT))
+endif
+endif
+
+# If the build directory is not given, make it reflect the board name (and
+# optionally the board variant).
+ifneq ($(BOARD_VARIANT),)
+BUILD ?= build-$(BOARD)-$(BOARD_VARIANT)
+else
 BUILD ?= build-$(BOARD)
+endif
 
 CROSS_COMPILE ?= arm-none-eabi-
 UF2CONV ?= $(TOP)/tools/uf2conv.py
@@ -21,7 +33,13 @@ UF2CONV ?= $(TOP)/tools/uf2conv.py
 MCU_SERIES_LOWER = $(shell echo $(MCU_SERIES) | tr '[:upper:]' '[:lower:]')
 
 include ../../py/mkenv.mk
+# Include board specific .mk file, and optional board variant .mk file.
 include $(BOARD_DIR)/mpconfigboard.mk
+ifeq ($(BOARD_VARIANT),)
+-include $(BOARD_DIR)/mpconfigvariant.mk
+else
+include $(BOARD_DIR)/mpconfigvariant_$(BOARD_VARIANT).mk
+endif
 include mcu/$(MCU_SERIES_LOWER)/mpconfigmcu.mk
 
 # Qstr definitions (must come before including py.mk)
@@ -55,6 +73,7 @@ INC += -I$(TOP)/lib/asf4/$(MCU_SERIES_LOWER)/hpl/tc
 INC += -I$(TOP)/lib/asf4/$(MCU_SERIES_LOWER)/include
 INC += -I$(TOP)/lib/asf4/$(MCU_SERIES_LOWER)/include/pio
 INC += -I$(TOP)/lib/tinyusb/src
+INC += -I$(TOP)/shared/tinyusb/
 
 MAKE_PINS = boards/make-pins.py
 BOARD_PINS = $(BOARD_DIR)/pins.csv
@@ -67,7 +86,8 @@ CFLAGS += $(INC) -Wall -Werror -std=c99 -nostdlib -mthumb $(CFLAGS_MCU) -fsingle
 CFLAGS += -DMCU_$(MCU_SERIES) -D__$(CMSIS_MCU)__
 CFLAGS += $(CFLAGS_EXTRA)
 
-CFLAGS += -DMICROPY_HW_CODESIZE=$(MICROPY_HW_CODESIZE)
+# Strip the letter 'K' from MICROPY_HW_CODESIZE for use by C code.
+CFLAGS += -DMICROPY_HW_CODESIZE=$(strip $(subst K,' ', $(MICROPY_HW_CODESIZE)))
 
 LDFLAGS += -nostdlib $(addprefix -T,$(LD_FILES)) -Map=$@.map --cref
 LDFLAGS += --defsym=_codesize=$(MICROPY_HW_CODESIZE)
@@ -93,21 +113,20 @@ LIBSTDCPP_FILE_NAME = "$(shell $(CXX) $(CXXFLAGS) -print-file-name=libstdc++.a)"
 LDFLAGS += -L"$(shell dirname $(LIBSTDCPP_FILE_NAME))"
 endif
 
+LDFLAGS += --wrap=dcd_event_handler
+
 MPY_CROSS_FLAGS += -march=$(MPY_CROSS_MCU_ARCH)
 
 SRC_C += \
 	mcu/$(MCU_SERIES_LOWER)/clock_config.c \
 	help.c \
-	machine_adc.c \
 	machine_bitstream.c \
 	machine_dac.c \
 	machine_i2c.c \
 	machine_pin.c \
 	machine_rtc.c \
 	machine_spi.c \
-	machine_uart.c \
 	main.c \
-	modmachine.c \
 	modsamd.c \
 	mphalport.c \
 	pendsv.c \
@@ -117,7 +136,7 @@ SRC_C += \
 	samd_qspiflash.c \
 	samd_soc.c \
 	samd_spiflash.c \
-	tusb_port.c \
+	usbd.c \
 
 SHARED_SRC_C += \
 	drivers/dht/dht.c \
@@ -132,7 +151,10 @@ SHARED_SRC_C += \
 	shared/runtime/stdout_helpers.c \
 	shared/runtime/sys_stdio_mphal.c \
 	shared/timeutils/timeutils.c \
-	shared/tinyusb/mp_cdc_common.c \
+	shared/tinyusb/mp_usbd.c \
+	shared/tinyusb/mp_usbd_cdc.c \
+	shared/tinyusb/mp_usbd_descriptor.c \
+	shared/tinyusb/mp_usbd_runtime.c \
 
 ASF4_SRC_C += $(addprefix lib/asf4/$(MCU_SERIES_LOWER)/,\
 	hal/src/hal_atomic.c \
@@ -140,35 +162,8 @@ ASF4_SRC_C += $(addprefix lib/asf4/$(MCU_SERIES_LOWER)/,\
 	hpl/nvmctrl/hpl_nvmctrl.c \
 	)
 
-LIBM_SRC_C += $(addprefix lib/libm/,\
-	acoshf.c \
-	asinfacosf.c \
-	asinhf.c \
-	atan2f.c \
-	atanf.c \
-	atanhf.c \
-	ef_rem_pio2.c \
-	ef_sqrt.c \
-	erf_lgamma.c \
-	fmodf.c \
-	kf_cos.c \
-	kf_rem_pio2.c \
-	kf_sin.c \
-	kf_tan.c \
-	log1pf.c \
-	math.c \
-	nearbyintf.c \
-	roundf.c \
-	sf_cos.c \
-	sf_erf.c \
-	sf_frexp.c \
-	sf_ldexp.c \
-	sf_modf.c \
-	sf_sin.c \
-	sf_tan.c \
-	wf_lgamma.c \
-	wf_tgamma.c \
-	)
+LIBM_SRC_C += $(SRC_LIB_LIBM_C)
+LIBM_SRC_C += $(SRC_LIB_LIBM_SQRT_SW_C)
 
 TINYUSB_SRC_C += $(addprefix lib/tinyusb/src/,\
 	class/cdc/cdc_device.c \
@@ -206,7 +201,7 @@ $(BUILD)/firmware.bin: $(BUILD)/firmware.elf
 	$(Q)$(OBJCOPY) -O binary -j .isr_vector -j .text -j .data $^ $(BUILD)/firmware.bin
 
 $(BUILD)/firmware.uf2: $(BUILD)/firmware.bin
-	$(Q)$(PYTHON) $(UF2CONV) -b $(TEXT0) -c -o $@ $<
+	$(Q)$(PYTHON) $(UF2CONV) $(UF2CONV_FLAGS) -b $(TEXT0) -c -o $@ $<
 
 # pin_af.c: $(BUILD)/$(GEN_PIN_AF) | $(HEADER_BUILD)
 

@@ -27,6 +27,45 @@
 # ADC objects based on inputs from the vendor HAL/SDK and the board
 # definition's pins.csv.
 
+# The pins.csv file can contain empty lines, comments (a line beginning with "#")
+# or pin definition lines.  Pin definition lines must be of the form:
+#
+#     board,cpu
+#
+# Where "board" is the user-facing name of the pin as specified by the particular
+# board layout and markings, and "cpu" is the corresponding name of the CPU/MCU
+# pin.
+#
+# The "board" entry may be absent if the CPU pin has no additional name, and both
+# entries may start with "-" to hide them from the corresponding Python dict of
+# pins, and hence hide them from the user (but they are still accessible in C).
+#
+# For example, take the following pins.csv file:
+#
+#     X1,PA0
+#     -X2,PA1
+#     X3,-PA2
+#     -X4,-PA3
+#     ,PA4
+#     ,-PA5
+#
+# The first row here configures:
+# - The CPU pin PA0 is labelled X1.
+# - The Python user can access both by the names Pin("X1") and Pin("A0").
+# - The Python user can access both by the members Pin.board.X1 and Pin.cpu.A0.
+# - In C code they are available as pyb_pin_X1 and pin_A0.
+#
+# Prefixing the names with "-" hides them from the user.  The following table
+# summarises the various possibilities:
+#
+#     pins.csv entry | board name | cpu name | C board name | C cpu name
+#     ---------------+------------+----------+--------------+-----------
+#     X1,PA0           "X1"         "A0"       pyb_pin_X1     pin_A0
+#     -X2,PA1          -            "A1"       pyb_pin_X2     pin_A1
+#     X3,-PA2          "X3"         -          pyb_pin_X3     pin_A2
+#     -X4,-PA3         -            -          pyb_pin_X4     pin_A3
+#     ,PA4             -            "A4"       -              pin_A4
+#     ,-PA5            -            -          -              pin_A5
 
 import argparse
 import csv
@@ -133,6 +172,8 @@ class PinGenerator:
         self._pins = []
         self._pin_type = pin_type
         self._enable_af = enable_af
+        self._pin_cpu_num_entries = 0
+        self._pin_board_num_entries = 0
 
     # Allows a port to define a known cpu pin (without relying on it being in the
     # csv file).
@@ -250,7 +291,7 @@ class PinGenerator:
     def print_board_locals_dict(self, out_source):
         print(file=out_source)
         print(
-            "STATIC const mp_rom_map_elem_t machine_pin_board_pins_locals_dict_table[] = {",
+            "static const mp_rom_map_elem_t machine_pin_board_pins_locals_dict_table[] = {",
             file=out_source,
         )
         for pin in self.available_pins():
@@ -258,6 +299,9 @@ class PinGenerator:
                 if board_hidden:
                     # Don't include hidden pins in Pins.board.
                     continue
+
+                # Keep track of the total number of Pin.board entries.
+                self._pin_board_num_entries += 1
 
                 # We don't use the enable macro for board pins, because they
                 # shouldn't be referenced in pins.csv unless they're
@@ -279,10 +323,13 @@ class PinGenerator:
     def print_cpu_locals_dict(self, out_source):
         print(file=out_source)
         print(
-            "STATIC const mp_rom_map_elem_t machine_pin_cpu_pins_locals_dict_table[] = {",
+            "static const mp_rom_map_elem_t machine_pin_cpu_pins_locals_dict_table[] = {",
             file=out_source,
         )
         for pin in self.available_pins(exclude_hidden=True):
+            # Keep track of the total number of Pin.cpu entries.
+            self._pin_cpu_num_entries += 1
+
             m = pin.enable_macro()
             if m:
                 print("    #if {}".format(m), file=out_source)
@@ -312,6 +359,20 @@ class PinGenerator:
 
     # Print the pin_CPUNAME and pin_BOARDNAME macros.
     def print_defines(self, out_header, cpu=True, board=True):
+        # Provide #defines for the number of cpu and board pins.
+        print(
+            "#define MICROPY_PY_MACHINE_PIN_CPU_NUM_ENTRIES ({})".format(
+                self._pin_cpu_num_entries
+            ),
+            file=out_header,
+        )
+        print(
+            "#define MICROPY_PY_MACHINE_PIN_BOARD_NUM_ENTRIES ({})".format(
+                self._pin_board_num_entries
+            ),
+            file=out_header,
+        )
+
         # Provide #defines for each cpu pin.
         for pin in self.available_pins():
             print(file=out_header)
